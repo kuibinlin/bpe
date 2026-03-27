@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+/* Apple-inspired BPE Visualizer — Training & Inference phases */
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
-const EXAMPLE_SENTENCES = [
-  {
-    label: "🇸🇬 Multilingual SG",
-    text: "bro, want makan now? the 菜饭 at com 3 canteen every time long queue one, must go early.",
-  },
-];
+const DEFAULT_TRAINING_TEXT = "low lower lowest";
+const DEFAULT_INFERENCE_TEXT = "slowest flower";
+
+// ── BPE Core Logic ──────────────────────────────────────────────
 
 function getInitialTokens(text) {
   return [...text].map((ch) => ch);
@@ -53,27 +52,45 @@ function tokenToDisplay(token) {
   return token.replace(/ /g, "␣").replace(/\n/g, "↵").replace(/\t/g, "→");
 }
 
+// Inference: apply frozen merge rules in order (no frequency counting)
+function computeInferenceSteps(text, mergeRules) {
+  if (!text || mergeRules.length === 0) return [{ tokens: getInitialTokens(text || ""), rule: null, ruleIndex: -1 }];
+  let tokens = getInitialTokens(text);
+  const allSteps = [{ tokens: [...tokens], rule: null, ruleIndex: -1 }];
+  for (let ri = 0; ri < mergeRules.length; ri++) {
+    const rule = mergeRules[ri];
+    const newTokens = mergePair(tokens, rule.left, rule.right);
+    if (newTokens.length < tokens.length) {
+      tokens = newTokens;
+      allSteps.push({ tokens: [...tokens], rule, ruleIndex: ri });
+    }
+  }
+  return allSteps;
+}
+
+// ── Color Palette (Apple system colors) ─────────────────────────
+
 const PALETTE = [
-  "#E07A5F",
-  "#3D85C6",
-  "#81B29A",
-  "#F2CC8F",
-  "#6A4C93",
-  "#F4845F",
-  "#577590",
-  "#43AA8B",
-  "#F9C74F",
-  "#90BE6D",
-  "#F94144",
-  "#277DA1",
-  "#F3722C",
-  "#4D908E",
-  "#F8961E",
-  "#7209B7",
-  "#43AA8B",
-  "#EF476F",
-  "#118AB2",
-  "#073B4C",
+  "#0071E3",
+  "#BF5AF2",
+  "#30D158",
+  "#FF9F0A",
+  "#FF375F",
+  "#64D2FF",
+  "#AC8E68",
+  "#5E5CE6",
+  "#FF6482",
+  "#32ADE6",
+  "#FF453A",
+  "#FFD60A",
+  "#34C759",
+  "#AF52DE",
+  "#007AFF",
+  "#FF9500",
+  "#5856D6",
+  "#FF2D55",
+  "#00C7BE",
+  "#A2845E",
 ];
 
 function getTokenColor(token, colorMap) {
@@ -84,6 +101,8 @@ function getTokenColor(token, colorMap) {
   return colorMap.current.get(token);
 }
 
+// ── Presentational Components ───────────────────────────────────
+
 function TokenChip({ token, color, isNew, isHighlight, small }) {
   const displayed = tokenToDisplay(token);
   return (
@@ -91,20 +110,20 @@ function TokenChip({ token, color, isNew, isHighlight, small }) {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        padding: small ? "2px 6px" : "4px 10px",
+        padding: small ? "3px 8px" : "5px 12px",
         margin: "2px",
-        borderRadius: "6px",
+        borderRadius: "8px",
         fontSize: small ? "12px" : "14px",
-        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        fontFamily: "'SF Mono', ui-monospace, Menlo, Consolas, monospace",
         fontWeight: 500,
-        background: isHighlight ? `${color}22` : `${color}15`,
-        border: `1.5px solid ${isHighlight ? color : color + "55"}`,
-        color: "#1a1a2e",
-        transition: "all 0.3s ease",
-        transform: isNew ? "scale(1.05)" : "scale(1)",
-        boxShadow: isNew ? `0 2px 8px ${color}33` : "none",
+        background: isHighlight ? `${color}18` : `${color}0C`,
+        border: `1px solid ${isHighlight ? color + "66" : color + "33"}`,
+        color: "#1D1D1F",
+        transition: "all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
+        transform: isNew ? "scale(1.04)" : "scale(1)",
+        boxShadow: isNew ? `0 2px 8px ${color}22` : "none",
         whiteSpace: "pre",
-        letterSpacing: "0.02em",
+        letterSpacing: "0.01em",
       }}
     >
       {displayed}
@@ -112,46 +131,47 @@ function TokenChip({ token, color, isNew, isHighlight, small }) {
   );
 }
 
-function MergeRuleChip({ left, right, merged, color, index }) {
+function MergeRuleChip({ left, right, merged, color, index, active, dimmed }) {
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "6px",
-        padding: "6px 12px",
-        borderRadius: "8px",
-        background: `${color}08`,
-        border: `1px solid ${color}25`,
+        gap: "8px",
+        padding: "8px 14px",
+        borderRadius: "10px",
+        background: active ? `${color}14` : dimmed ? "transparent" : `${color}08`,
+        border: `1px solid ${active ? color + "44" : dimmed ? "#E8E8ED" : color + "18"}`,
         fontSize: "13px",
-        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-        animation: "fadeSlideIn 0.4s ease forwards",
-        opacity: 0,
-        animationDelay: `${index * 0.05}s`,
+        fontFamily: "'SF Mono', ui-monospace, Menlo, Consolas, monospace",
+        animation: active ? "none" : "fadeSlideIn 0.4s cubic-bezier(0.25, 0.1, 0.25, 1) forwards",
+        opacity: dimmed ? 0.4 : (active ? 1 : 0),
+        animationDelay: active || dimmed ? "0s" : `${index * 0.04}s`,
+        transition: "all 0.3s ease",
       }}
     >
       <span
         style={{
-          color: "#999",
+          color: "#86868B",
           fontSize: "11px",
           fontWeight: 600,
           minWidth: "20px",
-          fontFamily: "'DM Sans', sans-serif",
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif",
         }}
       >
         {index + 1}
       </span>
-      <span style={{ color: "#555" }}>{tokenToDisplay(left)}</span>
-      <span style={{ color: "#bbb", fontSize: "11px" }}>+</span>
-      <span style={{ color: "#555" }}>{tokenToDisplay(right)}</span>
-      <span style={{ color: "#ccc" }}>→</span>
+      <span style={{ color: "#1D1D1F" }}>{tokenToDisplay(left)}</span>
+      <span style={{ color: "#D2D2D7", fontSize: "11px" }}>+</span>
+      <span style={{ color: "#1D1D1F" }}>{tokenToDisplay(right)}</span>
+      <span style={{ color: "#D2D2D7" }}>→</span>
       <span
         style={{
-          padding: "1px 6px",
-          borderRadius: "4px",
-          background: `${color}20`,
-          border: `1px solid ${color}44`,
-          color: "#1a1a2e",
+          padding: "2px 8px",
+          borderRadius: "6px",
+          background: `${color}14`,
+          border: `1px solid ${color}33`,
+          color: "#1D1D1F",
           fontWeight: 600,
         }}
       >
@@ -161,29 +181,44 @@ function MergeRuleChip({ left, right, merged, color, index }) {
   );
 }
 
+// Section label helper
+const SECTION_LABEL_STYLE = {
+  fontSize: "12px",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  color: "#86868B",
+  marginBottom: "16px",
+};
+
+// ── Main Component ──────────────────────────────────────────────
+
 export default function BPEVisualizer() {
-  const [inputText, setInputText] = useState(
-    "bro, want makan now? the 菜饭 at com 3 canteen every time long queue one, must go early.",
-  );
+  const [activePhase, setActivePhase] = useState("training");
+  const [inputText, setInputText] = useState(DEFAULT_TRAINING_TEXT);
   const [vocabSize, setVocabSize] = useState(100);
   const [vocabSizeInput, setVocabSizeInput] = useState("100");
   const [steps, setSteps] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
   const colorMap = useRef(new Map());
 
+  // Inference state
+  const [inferenceText, setInferenceText] = useState(DEFAULT_INFERENCE_TEXT);
+  const [inferenceCurrentStep, setInferenceCurrentStep] = useState(0);
+
   const computeSteps = useCallback((text, maxVocab) => {
     if (!text) return;
     colorMap.current = new Map();
     let tokens = getInitialTokens(text);
-    const cumulativeVocab = new Set(tokens); // initial chars count toward vocab
+    const cumulativeVocab = new Set(tokens);
     const allSteps = [{ tokens: [...tokens], merge: null }];
     let safety = 0;
     while (safety < 10000) {
       const pair = findMostFrequentPair(tokens);
-      if (!pair) break; // no more mergeable pairs — stop regardless of vocab size
-      if (cumulativeVocab.size >= maxVocab) break; // vocab cap reached
+      if (!pair) break;
+      if (cumulativeVocab.size >= maxVocab) break;
       tokens = mergePair(tokens, pair.left, pair.right);
-      cumulativeVocab.add(pair.merged); // each merge adds exactly one new token
+      cumulativeVocab.add(pair.merged);
       allSteps.push({ tokens: [...tokens], merge: pair });
       safety++;
     }
@@ -204,39 +239,71 @@ export default function BPEVisualizer() {
     }
   };
 
+  // Training derived values
   const current = steps[currentStep] || { tokens: [], merge: null };
   const mergeHistory = steps.slice(1, currentStep + 1).map((s) => s.merge);
-
-  const uniqueTokens = [...new Set(current.tokens)];
   const tokenFreq = {};
   current.tokens.forEach((t) => (tokenFreq[t] = (tokenFreq[t] || 0) + 1));
+
+  // Cumulative vocabulary: base characters (always kept) + learned merge tokens
+  const baseChars = steps.length > 0 ? [...new Set(steps[0].tokens)].sort() : [];
+  const learnedTokens = mergeHistory.map((m) => m.merged);
+  const cumulativeVocab = [...baseChars, ...learnedTokens];
+  const baseCharCount = baseChars.length;
+  const learnedCount = learnedTokens.length;
 
   const vocabCapReached =
     steps.length > 1 &&
     currentStep === steps.length - 1 &&
-    uniqueTokens.length >= vocabSize;
+    cumulativeVocab.length >= vocabSize;
 
   const noMorePairs =
     steps.length > 1 &&
     currentStep === steps.length - 1 &&
-    uniqueTokens.length < vocabSize;
+    cumulativeVocab.length < vocabSize;
+
+  // All merge rules from complete training (for inference)
+  const frozenMergeRules = useMemo(() => {
+    return steps.slice(1).map((s) => ({
+      left: s.merge.left,
+      right: s.merge.right,
+      merged: s.merge.merged,
+    }));
+  }, [steps]);
+
+  // Inference computation
+  const inferenceSteps = useMemo(() => {
+    return computeInferenceSteps(inferenceText, frozenMergeRules);
+  }, [inferenceText, frozenMergeRules]);
+
+  useEffect(() => {
+    setInferenceCurrentStep(0);
+  }, [inferenceText, frozenMergeRules]);
+
+  const infCurrent = inferenceSteps[inferenceCurrentStep] || { tokens: [], rule: null, ruleIndex: -1 };
+  const infUniqueTokens = [...new Set(infCurrent.tokens)];
+  const infTokenFreq = {};
+  infCurrent.tokens.forEach((t) => (infTokenFreq[t] = (infTokenFreq[t] || 0) + 1));
+
+  // Which rule indices have been applied up to current inference step
+  const appliedRuleIndices = new Set(
+    inferenceSteps.slice(1, inferenceCurrentStep + 1).map((s) => s.ruleIndex)
+  );
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background:
-          "linear-gradient(170deg, #fafafa 0%, #f0ece3 50%, #e8e4db 100%)",
-        fontFamily: "'DM Sans', system-ui, sans-serif",
-        color: "#1a1a2e",
+        background: "#F5F5F7",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif",
+        color: "#1D1D1F",
         padding: "0",
         overflow: "auto",
       }}
     >
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:wght@700;800&display=swap');
         @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(6px); }
+          from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
         @keyframes pulse {
@@ -244,30 +311,8 @@ export default function BPEVisualizer() {
           50% { transform: scale(1.02); }
         }
         textarea:focus, button:focus-visible {
-          outline: 2px solid #E07A5F;
-          outline-offset: 2px;
-        }
-        .example-btn {
-          padding: 6px 14px;
-          border-radius: 20px;
-          border: 1.5px solid #ddd;
-          background: white;
-          font-size: 13px;
-          cursor: pointer;
-          transition: all 0.2s;
-          font-family: 'DM Sans', sans-serif;
-          color: #555;
-        }
-        .example-btn:hover {
-          border-color: #E07A5F;
-          color: #E07A5F;
-          background: #fef6f4;
-        }
-        .example-btn.active {
-          border-color: #E07A5F;
-          color: #E07A5F;
-          background: #fef6f4;
-          font-weight: 600;
+          outline: 3px solid rgba(0, 113, 227, 0.4);
+          outline-offset: 1px;
         }
         .ctrl-btn {
           display: inline-flex;
@@ -275,106 +320,167 @@ export default function BPEVisualizer() {
           justify-content: center;
           gap: 6px;
           padding: 8px 20px;
-          border-radius: 8px;
-          border: 1.5px solid #ddd;
-          background: white;
+          border-radius: 980px;
+          border: 1px solid #D2D2D7;
+          background: #FFFFFF;
           font-size: 14px;
           cursor: pointer;
-          transition: all 0.2s;
-          font-family: 'DM Sans', sans-serif;
-          color: #444;
+          transition: all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+          font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+          color: #1D1D1F;
           font-weight: 500;
         }
-        .ctrl-btn:hover { border-color: #E07A5F; color: #E07A5F; }
-        .ctrl-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .ctrl-btn.primary {
-          background: #E07A5F;
-          color: white;
-          border-color: #E07A5F;
+        .ctrl-btn:hover {
+          border-color: #0071E3;
+          color: #0071E3;
         }
-        .ctrl-btn.primary:hover { background: #c9694f; }
+        .ctrl-btn:disabled {
+          opacity: 0.3;
+          cursor: not-allowed;
+        }
+        .ctrl-btn:disabled:hover {
+          border-color: #D2D2D7;
+          color: #1D1D1F;
+        }
+        .ctrl-btn.primary {
+          background: #0071E3;
+          color: #FFFFFF;
+          border-color: #0071E3;
+        }
+        .ctrl-btn.primary:hover {
+          background: #0077ED;
+        }
+        .ctrl-btn.inference {
+          border-color: #BF5AF2;
+          color: #FFFFFF;
+          background: #BF5AF2;
+        }
+        .ctrl-btn.inference:hover {
+          background: #A84BD6;
+        }
         .section-card {
-          background: white;
-          border-radius: 14px;
+          background: #FFFFFF;
+          border-radius: 16px;
           padding: 24px;
-          border: 1px solid #e8e4db;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+          border: none;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
         }
         .progress-track {
-          height: 4px;
-          background: #eee;
+          height: 3px;
+          background: #E8E8ED;
           border-radius: 2px;
           overflow: hidden;
           margin-top: 16px;
         }
         .progress-fill {
           height: 100%;
-          background: linear-gradient(90deg, #E07A5F, #F2CC8F);
+          background: linear-gradient(90deg, #0071E3, #2997FF);
           border-radius: 2px;
-          transition: width 0.4s ease;
+          transition: width 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+        .progress-fill.inference {
+          background: linear-gradient(90deg, #BF5AF2, #DA8FFF);
         }
         .vocab-input {
           width: 72px;
           padding: 7px 10px;
           border-radius: 8px;
-          border: 1.5px solid #e0dcd4;
-          font-family: 'JetBrains Mono', monospace;
+          border: 1px solid #D2D2D7;
+          font-family: 'SF Mono', ui-monospace, Menlo, monospace;
           font-size: 14px;
           font-weight: 600;
-          color: #1a1a2e;
-          background: #fafaf8;
+          color: #1D1D1F;
+          background: #F5F5F7;
           text-align: center;
-          transition: border-color 0.2s;
+          transition: border-color 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
         }
         .vocab-input:focus {
           outline: none;
-          border-color: #E07A5F;
+          border-color: #0071E3;
+          box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.2);
         }
         .vocab-cap-badge {
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          padding: 3px 10px;
-          border-radius: 20px;
-          background: #F2CC8F22;
-          border: 1px solid #F2CC8F88;
+          padding: 4px 12px;
+          border-radius: 980px;
+          background: rgba(52, 199, 89, 0.1);
+          border: 1px solid rgba(52, 199, 89, 0.3);
           font-size: 12px;
-          color: #b8922a;
+          color: #248A3D;
           font-weight: 600;
-          animation: fadeSlideIn 0.3s ease;
+          animation: fadeSlideIn 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+        .phase-tabs {
+          display: flex;
+          background: #E8E8ED;
+          border-radius: 980px;
+          padding: 3px;
+          width: fit-content;
+        }
+        .phase-tab {
+          padding: 8px 24px;
+          border-radius: 980px;
+          border: none;
+          background: transparent;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+          font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+          color: #86868B;
+        }
+        .phase-tab.active {
+          background: #FFFFFF;
+          color: #1D1D1F;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .phase-tab:not(.active):hover {
+          color: #1D1D1F;
+        }
+        @media (max-width: 430px) {
+          .section-card {
+            padding: 16px;
+            border-radius: 12px;
+          }
+          .phase-tab {
+            padding: 8px 16px;
+            font-size: 13px;
+          }
         }
       `}</style>
 
       <div
         style={{
-          maxWidth: "900px",
+          maxWidth: "980px",
           margin: "0 auto",
-          padding: "40px 24px 60px",
+          padding: "48px 24px 64px",
         }}
       >
         {/* Header */}
-        <div style={{ marginBottom: "36px" }}>
+        <div style={{ marginBottom: "32px" }}>
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "12px",
+              gap: "16px",
               marginBottom: "8px",
             }}
           >
             <div
               style={{
-                width: "40px",
-                height: "40px",
-                borderRadius: "10px",
-                background: "linear-gradient(135deg, #E07A5F, #F2CC8F)",
+                width: "44px",
+                height: "44px",
+                borderRadius: "12px",
+                background: "linear-gradient(135deg, #0071E3, #2997FF)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: "20px",
+                fontSize: "22px",
                 color: "white",
-                fontWeight: 700,
-                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 600,
+                fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
               }}
             >
               B
@@ -382,12 +488,13 @@ export default function BPEVisualizer() {
             <div>
               <h1
                 style={{
-                  fontFamily: "'Playfair Display', serif",
-                  fontSize: "28px",
-                  fontWeight: 800,
+                  fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif",
+                  fontSize: "32px",
+                  fontWeight: 600,
                   margin: 0,
-                  letterSpacing: "-0.02em",
-                  color: "#1a1a2e",
+                  letterSpacing: "-0.022em",
+                  color: "#1D1D1F",
+                  lineHeight: 1.1,
                 }}
               >
                 Byte Pair Encoding
@@ -396,532 +503,941 @@ export default function BPEVisualizer() {
           </div>
           <p
             style={{
-              color: "#888",
-              fontSize: "15px",
-              margin: "4px 0 0 52px",
-              lineHeight: 1.5,
-              maxWidth: "600px",
+              color: "#86868B",
+              fontSize: "17px",
+              margin: "8px 0 0 0",
+              lineHeight: 1.47,
+              textAlign: "left",
             }}
           >
-            Watch how BPE builds a vocabulary by repeatedly merging the most
-            frequent pair of tokens — the same algorithm behind GPT, Claude, and
-            many modern LLM tokenizers.
+            Step through both phases of BPE — train a tokenizer by learning
+            merge rules from a corpus, then see how those frozen rules tokenize
+            new text at inference.
           </p>
         </div>
 
-        {/* Input Section */}
-        <div className="section-card" style={{ marginBottom: "20px" }}>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "#aaa",
-              marginBottom: "12px",
-            }}
-          >
-            Input Text
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "6px",
-              marginBottom: "14px",
-            }}
-          >
-            {EXAMPLE_SENTENCES.map((ex, i) => (
-              <button
-                key={i}
-                className={`example-btn ${inputText === ex.text ? "active" : ""}`}
-                onClick={() => setInputText(ex.text)}
-              >
-                {ex.label}
-              </button>
-            ))}
-          </div>
-          <textarea
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            rows={2}
-            style={{
-              width: "100%",
-              padding: "12px 14px",
-              borderRadius: "10px",
-              border: "1.5px solid #e0dcd4",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "14px",
-              resize: "vertical",
-              background: "#fafaf8",
-              color: "#1a1a2e",
-              boxSizing: "border-box",
-              lineHeight: 1.6,
-            }}
-            placeholder="Type or paste any text..."
-          />
-        </div>
-
-        {/* Tokens Display */}
-        <div className="section-card" style={{ marginBottom: "20px" }}>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "#aaa",
-              marginBottom: "14px",
-            }}
-          >
-            {currentStep === 0 ? "Character Sequence" : "Token Sequence"}
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "3px",
-              lineHeight: 2,
-            }}
-          >
-            {current.tokens.map((token, i) => {
-              const color = getTokenColor(token, colorMap);
-              const isNew = current.merge && token === current.merge.merged;
-              return (
-                <TokenChip
-                  key={`${currentStep}-${i}`}
-                  token={token}
-                  color={color}
-                  isNew={isNew}
-                  isHighlight={isNew}
-                />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div
-          className="section-card"
-          style={{ marginBottom: "20px", marginTop: "20px" }}
-        >
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              alignItems: "center",
-              gap: "10px",
-              justifyContent: "space-between",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                gap: "8px",
-                flexWrap: "wrap",
-                alignItems: "center",
-              }}
+        {/* Phase Tabs */}
+        <div style={{ marginBottom: "24px" }}>
+          <div className="phase-tabs">
+            <button
+              className={`phase-tab ${activePhase === "training" ? "active" : ""}`}
+              onClick={() => setActivePhase("training")}
             >
-              <button
-                className="ctrl-btn"
-                disabled={currentStep === 0}
-                onClick={() => setCurrentStep((s) => s - 1)}
-              >
-                ‹ Back
-              </button>
-              <button
-                className="ctrl-btn primary"
-                disabled={currentStep >= steps.length - 1}
-                onClick={() => setCurrentStep((s) => s + 1)}
-              >
-                Next ›
-              </button>
-              <button
-                className="ctrl-btn"
-                disabled={currentStep === 0}
-                onClick={() => setCurrentStep(0)}
-              >
-                Reset
-              </button>
+              Phase 1: Training
+            </button>
+            <button
+              className={`phase-tab ${activePhase === "inference" ? "active" : ""}`}
+              onClick={() => setActivePhase("inference")}
+              disabled={frozenMergeRules.length === 0}
+              style={frozenMergeRules.length === 0 ? { opacity: 0.4, cursor: "not-allowed" } : {}}
+            >
+              Phase 2: Inference
+            </button>
+          </div>
+          {frozenMergeRules.length === 0 && activePhase === "training" && (
+            <p style={{ fontSize: "13px", color: "#86868B", marginTop: "8px" }}>
+              Enter a training corpus to learn merge rules, then switch to Inference.
+            </p>
+          )}
+        </div>
 
-              {/* Vocab Size Setting */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* PHASE 1: TRAINING                                      */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {activePhase === "training" && (
+          <>
+            {/* Training Corpus Input */}
+            <div className="section-card" style={{ marginBottom: "16px" }}>
+              <div style={SECTION_LABEL_STYLE}>
+                Training Corpus
+              </div>
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                rows={2}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  borderRadius: "12px",
+                  border: "1px solid #D2D2D7",
+                  fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
+                  fontSize: "14px",
+                  resize: "vertical",
+                  background: "#F5F5F7",
+                  color: "#1D1D1F",
+                  boxSizing: "border-box",
+                  lineHeight: 1.6,
+                  transition: "border-color 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
+                }}
+                placeholder="Enter training text..."
+              />
+            </div>
+
+            {/* Token Sequence */}
+            <div className="section-card" style={{ marginBottom: "16px" }}>
+              <div style={{ ...SECTION_LABEL_STYLE, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{currentStep === 0 ? "Character Sequence" : "Token Sequence"}</span>
+                <span style={{
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  color: "#0071E3",
+                  textTransform: "none",
+                  letterSpacing: "normal",
+                  fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
+                }}>
+                  {baseCharCount} initial + {learnedCount} learned = {baseCharCount + learnedCount} vocab
+                </span>
+              </div>
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
+                  gap: "3px",
+                  lineHeight: 2,
+                }}
+              >
+                {current.tokens.map((token, i) => {
+                  const color = getTokenColor(token, colorMap);
+                  const isNew = current.merge && token === current.merge.merged;
+                  return (
+                    <TokenChip
+                      key={`${currentStep}-${i}`}
+                      token={token}
+                      color={color}
+                      isNew={isNew}
+                      isHighlight={isNew}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Vocabulary & Merge Rules */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "16px",
+              }}
+            >
+              {/* Vocabulary */}
+              <div className="section-card">
+                <div
+                  style={{
+                    ...SECTION_LABEL_STYLE,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <span>Vocabulary (<span style={{ color: "#0071E3" }}>{cumulativeVocab.length}</span>)</span>
+                  {vocabSize && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        padding: "2px 8px",
+                        borderRadius: "980px",
+                        background:
+                          cumulativeVocab.length >= vocabSize ? "rgba(52, 199, 89, 0.1)" : "#F5F5F7",
+                        color:
+                          cumulativeVocab.length >= vocabSize ? "#248A3D" : "#86868B",
+                        fontWeight: 600,
+                        border: `1px solid ${cumulativeVocab.length >= vocabSize ? "rgba(52, 199, 89, 0.3)" : "#D2D2D7"}`,
+                      }}
+                    >
+                      cap: {vocabSize}
+                    </span>
+                  )}
+                </div>
+                {/* Base characters */}
+                <div style={{ fontSize: "11px", color: "#86868B", marginBottom: "8px", fontWeight: 500 }}>
+                  Initial character tokens ({baseCharCount})
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "3px",
+                    marginBottom: learnedCount > 0 ? "16px" : "0",
+                  }}
+                >
+                  {baseChars.map((token, i) => {
+                    const color = getTokenColor(token, colorMap);
+                    return (
+                      <TokenChip key={`base-${i}`} token={token} color={color} small />
+                    );
+                  })}
+                </div>
+                {/* Learned merge tokens */}
+                {learnedCount > 0 && (
+                  <>
+                    <div style={{ fontSize: "11px", color: "#0071E3", marginBottom: "8px", fontWeight: 500 }}>
+                      + Learned tokens ({learnedCount})
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "3px",
+                        maxHeight: "180px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {learnedTokens.map((token, i) => {
+                        const color = getTokenColor(token, colorMap);
+                        const isLatest = i === learnedCount - 1;
+                        return (
+                          <TokenChip key={`learned-${i}`} token={token} color={color} small isNew={isLatest} isHighlight={isLatest} />
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Merge Rules */}
+              <div className="section-card">
+                <div style={SECTION_LABEL_STYLE}>
+                  Learned Merge Rules (<span style={{ color: "#0071E3" }}>{mergeHistory.length}</span>)
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                    maxHeight: "280px",
+                    overflowY: "auto",
+                  }}
+                >
+                  {mergeHistory.length === 0 ? (
+                    <div
+                      style={{
+                        color: "#A1A1A6",
+                        fontSize: "14px",
+                        fontStyle: "italic",
+                        padding: "8px 0",
+                      }}
+                    >
+                      No merges yet — press Next Merge to learn rules
+                    </div>
+                  ) : (
+                    mergeHistory.map((m, i) => (
+                      <MergeRuleChip
+                        key={i}
+                        index={i}
+                        left={m.left}
+                        right={m.right}
+                        merged={m.merged}
+                        color={getTokenColor(m.merged, colorMap)}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div
+              className="section-card"
+              style={{ marginTop: "16px", marginBottom: "16px" }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
                   alignItems: "center",
-                  gap: "8px",
-                  marginLeft: "8px",
-                  paddingLeft: "16px",
-                  borderLeft: "1.5px solid #eee",
+                  gap: "10px",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <button
+                    className="ctrl-btn"
+                    disabled={currentStep === 0}
+                    onClick={() => setCurrentStep((s) => s - 1)}
+                  >
+                    ‹ Back
+                  </button>
+                  <button
+                    className="ctrl-btn primary"
+                    disabled={currentStep >= steps.length - 1}
+                    onClick={() => setCurrentStep((s) => s + 1)}
+                  >
+                    Next Merge ›
+                  </button>
+                  <button
+                    className="ctrl-btn"
+                    disabled={currentStep === 0}
+                    onClick={() => setCurrentStep(0)}
+                  >
+                    Reset
+                  </button>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      marginLeft: "8px",
+                      paddingLeft: "16px",
+                      borderLeft: "1px solid #D2D2D7",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        color: "#86868B",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Vocab cap
+                    </span>
+                    <input
+                      type="number"
+                      className="vocab-input"
+                      value={vocabSizeInput}
+                      min={2}
+                      max={5000}
+                      onChange={(e) => setVocabSizeInput(e.target.value)}
+                      onBlur={handleVocabSizeCommit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleVocabSizeCommit();
+                      }}
+                    />
+                    {vocabCapReached && (
+                      <span className="vocab-cap-badge">✓ vocab cap reached</span>
+                    )}
+                    {noMorePairs && (
+                      <span
+                        className="vocab-cap-badge"
+                        style={{
+                          background: "rgba(0, 0, 0, 0.04)",
+                          border: "1px solid #D2D2D7",
+                          color: "#86868B",
+                        }}
+                      >
+                        ✗ no more pairs (freq &lt; 2)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ fontSize: "13px", color: "#86868B", fontWeight: 400 }}>
+                  Step {currentStep} of {steps.length - 1}
+                </div>
+              </div>
+              <div className="progress-track">
+                <div
+                  className="progress-fill"
+                  style={{
+                    width:
+                      steps.length > 1
+                        ? `${(currentStep / (steps.length - 1)) * 100}%`
+                        : "0%",
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Current Merge Info */}
+            {current.merge && (
+              <div
+                style={{
+                  background: `${getTokenColor(current.merge.merged, colorMap)}0A`,
+                  border: `1px solid ${getTokenColor(current.merge.merged, colorMap)}22`,
+                  borderRadius: "14px",
+                  padding: "16px 24px",
+                  marginBottom: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                  animation: "fadeSlideIn 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
                 }}
               >
                 <span
                   style={{
-                    fontSize: "12px",
+                    fontSize: "11px",
                     fontWeight: 600,
-                    color: "#999",
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
-                    whiteSpace: "nowrap",
+                    color: getTokenColor(current.merge.merged, colorMap),
                   }}
                 >
-                  Vocab size
+                  Merge #{currentStep}
                 </span>
-                <input
-                  type="number"
-                  className="vocab-input"
-                  value={vocabSizeInput}
-                  min={2}
-                  max={5000}
-                  onChange={(e) => setVocabSizeInput(e.target.value)}
-                  onBlur={handleVocabSizeCommit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleVocabSizeCommit();
+                <span style={{ color: "#86868B", fontSize: "14px" }}>
+                  「{tokenToDisplay(current.merge.left)}」+「
+                  {tokenToDisplay(current.merge.right)}」→「
+                  {tokenToDisplay(current.merge.merged)}」
+                </span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: "13px",
+                    color: "#86868B",
+                    fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
                   }}
-                />
-                {vocabCapReached && (
-                  <span className="vocab-cap-badge">✓ vocab cap reached</span>
-                )}
-                {noMorePairs && (
-                  <span
-                    className="vocab-cap-badge"
-                    style={{
-                      background: "#eee",
-                      border: "1px solid #ddd",
-                      color: "#999",
-                    }}
-                  >
-                    ✗ no more pairs (freq &lt; 2) — text too short
-                  </span>
-                )}
+                >
+                  found {current.merge.count}× in corpus
+                </span>
+              </div>
+            )}
+
+            {/* Try Inference CTA */}
+            {frozenMergeRules.length > 0 && (
+              <div
+                style={{
+                  marginTop: "24px",
+                  padding: "20px 24px",
+                  borderRadius: "16px",
+                  background: "linear-gradient(135deg, rgba(191, 90, 242, 0.06), rgba(0, 113, 227, 0.06))",
+                  border: "1px solid rgba(191, 90, 242, 0.15)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "16px",
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: "15px", fontWeight: 600, color: "#1D1D1F", marginBottom: "4px" }}>
+                    Training complete — {frozenMergeRules.length} merge rules learned
+                  </div>
+                  <div style={{ fontSize: "13px", color: "#86868B" }}>
+                    Now see how these frozen rules tokenize new, unseen text.
+                  </div>
+                </div>
+                <button
+                  className="ctrl-btn inference"
+                  onClick={() => setActivePhase("inference")}
+                >
+                  Try Inference →
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* PHASE 2: INFERENCE                                     */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {activePhase === "inference" && (
+          <>
+            {/* Inference Input */}
+            <div className="section-card" style={{ marginBottom: "16px" }}>
+              <div style={SECTION_LABEL_STYLE}>
+                New Text (unseen during training)
+              </div>
+              <textarea
+                value={inferenceText}
+                onChange={(e) => setInferenceText(e.target.value)}
+                rows={2}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  borderRadius: "12px",
+                  border: "1px solid #D2D2D7",
+                  fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
+                  fontSize: "14px",
+                  resize: "vertical",
+                  background: "#F5F5F7",
+                  color: "#1D1D1F",
+                  boxSizing: "border-box",
+                  lineHeight: 1.6,
+                  transition: "border-color 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
+                }}
+                placeholder="Enter new text to tokenize..."
+              />
+            </div>
+
+            {/* Inference Token Sequence */}
+            <div className="section-card" style={{ marginBottom: "16px" }}>
+              <div style={{ ...SECTION_LABEL_STYLE, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{inferenceCurrentStep === 0 ? "Character Sequence" : "Tokenized Output"}</span>
+                <span style={{
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  color: "#BF5AF2",
+                  textTransform: "none",
+                  letterSpacing: "normal",
+                  fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
+                }}>
+                  {infCurrent.tokens.length} tokens · {[...inferenceText].length} characters · {infUniqueTokens.length} unique
+                </span>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "3px",
+                  lineHeight: 2,
+                }}
+              >
+                {infCurrent.tokens.map((token, i) => {
+                  const color = getTokenColor(token, colorMap);
+                  const isNew = infCurrent.rule && token === infCurrent.rule.merged;
+                  return (
+                    <TokenChip
+                      key={`inf-${inferenceCurrentStep}-${i}`}
+                      token={token}
+                      color={color}
+                      isNew={isNew}
+                      isHighlight={isNew}
+                    />
+                  );
+                })}
               </div>
             </div>
 
-            <div style={{ fontSize: "12px", color: "#aaa" }}>
-              Step {currentStep} of {steps.length - 1} · {current.tokens.length}{" "}
-              tokens · {uniqueTokens.length} unique
-            </div>
-          </div>
-          <div className="progress-track">
+            {/* Frozen Rules from Training + Inference Vocabulary */}
             <div
-              className="progress-fill"
               style={{
-                width:
-                  steps.length > 1
-                    ? `${(currentStep / (steps.length - 1)) * 100}%`
-                    : "0%",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "16px",
               }}
-            />
-          </div>
-        </div>
+            >
+              {/* Frozen Merge Rules */}
+              <div className="section-card">
+                <div style={SECTION_LABEL_STYLE}>
+                  Frozen Rules from Training ({frozenMergeRules.length})
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                    maxHeight: "280px",
+                    overflowY: "auto",
+                  }}
+                >
+                  {frozenMergeRules.map((m, i) => {
+                    const isApplied = appliedRuleIndices.has(i);
+                    const isCurrentRule = infCurrent.ruleIndex === i;
+                    return (
+                      <MergeRuleChip
+                        key={i}
+                        index={i}
+                        left={m.left}
+                        right={m.right}
+                        merged={m.merged}
+                        color={isApplied || isCurrentRule ? "#BF5AF2" : "#86868B"}
+                        active={isCurrentRule}
+                        dimmed={!isApplied && !isCurrentRule}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
 
-        {/* Current Merge */}
-        {current.merge && (
-          <div
-            style={{
-              background: `${getTokenColor(current.merge.merged, colorMap)}10`,
-              border: `1.5px solid ${getTokenColor(current.merge.merged, colorMap)}30`,
-              borderRadius: "12px",
-              padding: "14px 20px",
-              marginBottom: "20px",
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              flexWrap: "wrap",
-              animation: "fadeSlideIn 0.3s ease",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: getTokenColor(current.merge.merged, colorMap),
-              }}
+              {/* Inference Vocabulary */}
+              <div className="section-card">
+                <div
+                  style={{
+                    ...SECTION_LABEL_STYLE,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <span>Unique Tokens in Output ({infUniqueTokens.length})</span>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "3px",
+                    maxHeight: "280px",
+                    overflowY: "auto",
+                  }}
+                >
+                  {infUniqueTokens
+                    .sort((a, b) => b.length - a.length || a.localeCompare(b))
+                    .map((token, i) => {
+                      const color = getTokenColor(token, colorMap);
+                      return (
+                        <span
+                          key={i}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "2px",
+                          }}
+                        >
+                          <TokenChip token={token} color={color} small />
+                          <span
+                            style={{
+                              fontSize: "10px",
+                              color: "#A1A1A6",
+                              fontFamily: "'SF Mono', ui-monospace, Menlo, monospace",
+                              marginRight: "4px",
+                            }}
+                          >
+                            ×{infTokenFreq[token]}
+                          </span>
+                        </span>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+
+            {/* Inference Controls */}
+            <div
+              className="section-card"
+              style={{ marginTop: "16px", marginBottom: "16px" }}
             >
-              Merge #{currentStep}
-            </span>
-            <span style={{ color: "#888", fontSize: "13px" }}>
-              「{tokenToDisplay(current.merge.left)}」+「
-              {tokenToDisplay(current.merge.right)}」→「
-              {tokenToDisplay(current.merge.merged)}」
-            </span>
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: "12px",
-                color: "#aaa",
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
-            >
-              found {current.merge.count}× in sequence
-            </span>
-          </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: "10px",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <button
+                    className="ctrl-btn"
+                    disabled={inferenceCurrentStep === 0}
+                    onClick={() => setInferenceCurrentStep((s) => s - 1)}
+                  >
+                    ‹ Back
+                  </button>
+                  <button
+                    className="ctrl-btn inference"
+                    disabled={inferenceCurrentStep >= inferenceSteps.length - 1}
+                    onClick={() => setInferenceCurrentStep((s) => s + 1)}
+                  >
+                    Apply Rule ›
+                  </button>
+                  <button
+                    className="ctrl-btn"
+                    disabled={inferenceCurrentStep === 0}
+                    onClick={() => setInferenceCurrentStep(0)}
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <div style={{ fontSize: "13px", color: "#86868B", fontWeight: 400 }}>
+                  {inferenceCurrentStep === 0
+                    ? `${inferenceSteps.length - 1} rules match this text`
+                    : `Rule ${inferenceCurrentStep} of ${inferenceSteps.length - 1} applied`
+                  }
+                </div>
+              </div>
+              <div className="progress-track">
+                <div
+                  className="progress-fill inference"
+                  style={{
+                    width:
+                      inferenceSteps.length > 1
+                        ? `${(inferenceCurrentStep / (inferenceSteps.length - 1)) * 100}%`
+                        : "0%",
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Current Rule Application */}
+            {infCurrent.rule && (
+              <div
+                style={{
+                  background: "rgba(191, 90, 242, 0.06)",
+                  border: "1px solid rgba(191, 90, 242, 0.2)",
+                  borderRadius: "14px",
+                  padding: "16px 24px",
+                  marginBottom: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                  animation: "fadeSlideIn 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "#BF5AF2",
+                  }}
+                >
+                  Rule #{infCurrent.ruleIndex + 1}
+                </span>
+                <span style={{ color: "#86868B", fontSize: "14px" }}>
+                  「{tokenToDisplay(infCurrent.rule.left)}」+「
+                  {tokenToDisplay(infCurrent.rule.right)}」→「
+                  {tokenToDisplay(infCurrent.rule.merged)}」
+                </span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: "12px",
+                    color: "#86868B",
+                    padding: "3px 10px",
+                    borderRadius: "980px",
+                    background: "rgba(191, 90, 242, 0.08)",
+                    border: "1px solid rgba(191, 90, 242, 0.15)",
+                  }}
+                >
+                  no counting — pattern match only
+                </span>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Bottom Row: Vocabulary & Merge Rules */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "20px",
-          }}
-        >
-          {/* Vocabulary */}
-          <div className="section-card">
-            <div
-              style={{
-                fontSize: "11px",
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* EDUCATIONAL CONTENT (always visible)                   */}
+        {/* ═══════════════════════════════════════════════════════ */}
+
+        {/* How it works — two phases */}
+        <div className="section-card" style={{ marginTop: "32px" }}>
+          <div style={SECTION_LABEL_STYLE}>
+            How BPE Works
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Training phase */}
+            <div>
+              <div style={{
+                fontSize: "13px",
                 fontWeight: 600,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: "#aaa",
-                marginBottom: "14px",
+                color: "#0071E3",
+                marginBottom: "16px",
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
-              }}
-            >
-              <span>Vocabulary ({uniqueTokens.length})</span>
-              {vocabSize && (
-                <span
-                  style={{
-                    fontSize: "10px",
-                    padding: "1px 7px",
-                    borderRadius: "10px",
-                    background:
-                      uniqueTokens.length >= vocabSize ? "#F2CC8F33" : "#eee",
-                    color:
-                      uniqueTokens.length >= vocabSize ? "#b8922a" : "#bbb",
-                    fontWeight: 600,
-                    border: `1px solid ${uniqueTokens.length >= vocabSize ? "#F2CC8F88" : "#e0dcd4"}`,
-                  }}
-                >
-                  cap: {vocabSize}
-                </span>
-              )}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "3px",
-                maxHeight: "260px",
-                overflowY: "auto",
-              }}
-            >
-              {uniqueTokens
-                .sort((a, b) => b.length - a.length || a.localeCompare(b))
-                .map((token, i) => {
-                  const color = getTokenColor(token, colorMap);
-                  return (
-                    <span
-                      key={i}
+              }}>
+                <span style={{
+                  width: "20px",
+                  height: "20px",
+                  borderRadius: "50%",
+                  background: "rgba(0, 113, 227, 0.1)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                }}>1</span>
+                Training — learn merge rules from a corpus
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, 1fr)",
+                  gap: "24px",
+                }}
+              >
+                {[
+                  {
+                    n: "A",
+                    title: "Start with characters",
+                    desc: "Split corpus into individual characters. These form the base vocabulary.",
+                  },
+                  {
+                    n: "B",
+                    title: "Count adjacent pairs",
+                    desc: "Find which pair of adjacent tokens appears most frequently in the corpus.",
+                  },
+                  {
+                    n: "C",
+                    title: "Merge & add to vocab",
+                    desc: "Create a new token from the top pair. Vocab GROWS — original tokens are never deleted.",
+                  },
+                  {
+                    n: "D",
+                    title: "Repeat",
+                    desc: "Continue until vocab reaches desired size. Output: vocabulary + ordered merge rules.",
+                  },
+                ].map((s) => (
+                  <div key={s.n} style={{ textAlign: "center" }}>
+                    <div
                       style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "50%",
+                        background: "rgba(0, 113, 227, 0.08)",
                         display: "inline-flex",
                         alignItems: "center",
-                        gap: "2px",
+                        justifyContent: "center",
+                        fontWeight: 600,
+                        fontSize: "13px",
+                        color: "#0071E3",
+                        marginBottom: "10px",
                       }}
                     >
-                      <TokenChip token={token} color={color} small />
-                      <span
-                        style={{
-                          fontSize: "10px",
-                          color: "#bbb",
-                          fontFamily: "'JetBrains Mono', monospace",
-                          marginRight: "4px",
-                        }}
-                      >
-                        ×{tokenFreq[token]}
-                      </span>
-                    </span>
-                  );
-                })}
-            </div>
-          </div>
-
-          {/* Merge Rules */}
-          <div className="section-card">
-            <div
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: "#aaa",
-                marginBottom: "14px",
-              }}
-            >
-              Merge Rules ({mergeHistory.length})
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "6px",
-                maxHeight: "260px",
-                overflowY: "auto",
-              }}
-            >
-              {mergeHistory.length === 0 ? (
-                <div
-                  style={{
-                    color: "#ccc",
-                    fontSize: "13px",
-                    fontStyle: "italic",
-                    padding: "8px 0",
-                  }}
-                >
-                  No merges yet — press Next or Play
-                </div>
-              ) : (
-                mergeHistory.map((m, i) => (
-                  <MergeRuleChip
-                    key={i}
-                    index={i}
-                    left={m.left}
-                    right={m.right}
-                    merged={m.merged}
-                    color={getTokenColor(m.merged, colorMap)}
-                  />
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* How it works */}
-        <div className="section-card" style={{ marginTop: "20px" }}>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "#aaa",
-              marginBottom: "12px",
-            }}
-          >
-            How BPE Works
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gap: "16px",
-            }}
-          >
-            {[
-              {
-                n: "1",
-                title: "Start with characters",
-                desc: "Split text into individual characters (real BPE uses bytes; this is a character-level simplification)",
-              },
-              {
-                n: "2",
-                title: "Count all pairs",
-                desc: "Find the most frequent adjacent token pair",
-              },
-              {
-                n: "3",
-                title: "Merge top pair",
-                desc: "Replace every occurrence with a new combined token",
-              },
-              {
-                n: "4",
-                title: "Repeat",
-                desc: "Continue until vocabulary reaches desired size, or no pair appears more than once",
-              },
-            ].map((s) => (
-              <div key={s.n} style={{ textAlign: "center" }}>
-                <div
-                  style={{
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "50%",
-                    background: "linear-gradient(135deg, #E07A5F22, #F2CC8F22)",
-                    border: "1.5px solid #E07A5F33",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontFamily: "'Playfair Display', serif",
-                    fontWeight: 700,
-                    fontSize: "14px",
-                    color: "#E07A5F",
-                    marginBottom: "8px",
-                  }}
-                >
-                  {s.n}
-                </div>
-                <div
-                  style={{
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    marginBottom: "4px",
-                    color: "#333",
-                  }}
-                >
-                  {s.title}
-                </div>
-                <div
-                  style={{ fontSize: "12px", color: "#999", lineHeight: 1.4 }}
-                >
-                  {s.desc}
-                </div>
+                      {s.n}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        marginBottom: "4px",
+                        color: "#1D1D1F",
+                      }}
+                    >
+                      {s.title}
+                    </div>
+                    <div
+                      style={{ fontSize: "13px", color: "#86868B", lineHeight: 1.47 }}
+                    >
+                      {s.desc}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+
+            <div style={{ height: "1px", background: "#E8E8ED" }} />
+
+            {/* Inference phase */}
+            <div>
+              <div style={{
+                fontSize: "13px",
+                fontWeight: 600,
+                color: "#BF5AF2",
+                marginBottom: "16px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}>
+                <span style={{
+                  width: "20px",
+                  height: "20px",
+                  borderRadius: "50%",
+                  background: "rgba(191, 90, 242, 0.1)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                }}>2</span>
+                Inference — tokenize new text with frozen rules
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: "24px",
+                }}
+              >
+                {[
+                  {
+                    n: "A",
+                    title: "Start with characters",
+                    desc: "Split new (unseen) text into characters — same as training, but no frequency counting happens.",
+                  },
+                  {
+                    n: "B",
+                    title: "Apply rules in order",
+                    desc: "Walk through the merge rules list in the exact order they were learned. Apply each rule that matches.",
+                  },
+                  {
+                    n: "C",
+                    title: "Output token IDs",
+                    desc: "Look up each resulting token in the vocabulary to get numeric IDs — the neural network's actual input.",
+                  },
+                ].map((s) => (
+                  <div key={s.n} style={{ textAlign: "center" }}>
+                    <div
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "50%",
+                        background: "rgba(191, 90, 242, 0.08)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: 600,
+                        fontSize: "13px",
+                        color: "#BF5AF2",
+                        marginBottom: "10px",
+                      }}
+                    >
+                      {s.n}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        marginBottom: "4px",
+                        color: "#1D1D1F",
+                      }}
+                    >
+                      {s.title}
+                    </div>
+                    <div
+                      style={{ fontSize: "13px", color: "#86868B", lineHeight: 1.47 }}
+                    >
+                      {s.desc}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Key Points */}
-        <div className="section-card" style={{ marginTop: "20px" }}>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "#aaa",
-              marginBottom: "16px",
-            }}
-          >
-            Key Points
+        <div className="section-card" style={{ marginTop: "16px" }}>
+          <div style={SECTION_LABEL_STYLE}>
+            Key Concepts
           </div>
           <div
-            style={{ display: "flex", flexDirection: "column", gap: "12px" }}
+            style={{ display: "flex", flexDirection: "column", gap: "8px" }}
           >
             {[
               {
-                icon: "📚",
-                title: "Training vs. Inference",
-                desc: "BPE has two phases. During training, merge rules are learned from a large corpus. During inference, those rules are frozen — new text is tokenized by applying the same merges in the same learned order, greedily. The model never re-counts frequencies on new text.",
+                icon: "📈",
+                title: "Vocab grows, not shrinks",
+                desc: "Each merge adds a new token to the vocabulary — original characters are never deleted. GPT-2 starts with 256 bytes and ends with 50,257 tokens. This is why we set a vocab cap.",
               },
               {
                 icon: "🔒",
-                title: "Vocabulary is fixed after training",
-                desc: "How any new text gets tokenized is entirely determined by the trained vocabulary and its merge rules. The same word can tokenize differently depending on which vocabulary was used — GPT-4, LLaMA, and Claude all produce different token splits for the same input.",
+                title: "Rules are frozen after training",
+                desc: "At inference, the merge rules and their order are fixed. New text is tokenized by applying those same rules in sequence — no frequency counting happens. The model never re-learns from new input.",
               },
               {
-                icon: "🌐",
-                title: "Rare words & unknown characters",
-                desc: "BPE handles rare or unseen words by falling back to smaller subword units or individual characters. Byte-level BPE (used by GPT-2 and others) guarantees no unknown tokens, since every possible byte is in the base vocabulary.",
+                icon: "🧩",
+                title: "Unseen words decompose into subwords",
+                desc: "A word never seen during training (like \"slowest\") still gets tokenized — BPE falls back to learned subword pieces. This is why BPE has no \"unknown token\" problem.",
               },
               {
                 icon: "⚖️",
                 title: "Vocabulary size is a tradeoff",
-                desc: "A larger vocabulary means longer tokens and shorter sequences (faster, cheaper), but requires more memory and training data. A smaller vocabulary keeps the model lean but produces longer sequences. Real models range from ~32k (LLaMA 2) to ~100k (Claude, LLaMA 3).",
+                desc: "Larger vocab = longer tokens, shorter sequences (faster, cheaper) but more memory. Smaller vocab = shorter tokens, longer sequences. Real models: ~32k (LLaMA 2) to ~200k (GPT-4o).",
               },
             ].map((point, i) => (
               <div
                 key={i}
                 style={{
                   display: "flex",
-                  gap: "14px",
-                  padding: "14px 16px",
-                  borderRadius: "10px",
-                  background: "#fafaf8",
-                  border: "1px solid #eeebe5",
+                  gap: "16px",
+                  padding: "16px",
+                  borderRadius: "12px",
+                  background: "#F5F5F7",
+                  border: "none",
                 }}
               >
                 <span
@@ -932,16 +1448,16 @@ export default function BPEVisualizer() {
                 <div>
                   <div
                     style={{
-                      fontSize: "13px",
+                      fontSize: "14px",
                       fontWeight: 600,
-                      color: "#333",
+                      color: "#1D1D1F",
                       marginBottom: "4px",
                     }}
                   >
                     {point.title}
                   </div>
                   <div
-                    style={{ fontSize: "13px", color: "#888", lineHeight: 1.6 }}
+                    style={{ fontSize: "14px", color: "#86868B", lineHeight: 1.6 }}
                   >
                     {point.desc}
                   </div>
@@ -955,9 +1471,10 @@ export default function BPEVisualizer() {
         <div
           style={{
             textAlign: "center",
-            marginTop: "32px",
+            marginTop: "48px",
             fontSize: "12px",
-            color: "#ccc",
+            color: "#A1A1A6",
+            letterSpacing: "0.01em",
           }}
         >
           BPE Tokenization Visualizer — interactive educational tool
